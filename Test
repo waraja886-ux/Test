@@ -1,0 +1,2110 @@
+-- =========================================================
+-- FISH TRAINING AUTO FEED
+-- =========================================================
+-- TEST 1 PORT
+--
+-- Storage World  : SYYQW|192827
+-- Training World : NEZKW|19282711
+-- Food Fish ID   : 5580
+-- Training Port  : 12,51
+--
+-- Alur:
+--
+-- Training World
+--      |
+--      v
+-- Baca status port
+--      |
+--      +--> Content -> selesai
+--      |
+--      v
+-- Cek inventory food
+--      |
+--      +--> Ada -> tidak ke storage
+--      |
+--      +--> Tidak ada -> storage -> ambil 1
+--      |
+--      v
+-- Kembali Training World
+--      |
+--      v
+-- Jalan ke 11,51
+--      |
+--      v
+-- Feed 1 fish
+--      |
+--      v
+-- Tunggu XP server
+--      |
+--      v
+-- Wrench port lagi
+--      |
+--      v
+-- Baca status terbaru
+--      |
+--      v
+-- Ulangi sampai Content
+-- =========================================================
+
+
+-- =========================================================
+-- CONFIG
+-- =========================================================
+
+Config = {
+
+    -- =============================================
+    -- STORAGE
+    -- =============================================
+
+    StorageWorld = "SYYQW|192827",
+
+
+    -- =============================================
+    -- TRAINING WORLD
+    -- =============================================
+
+    TrainingWorld = "NEZKW|19282711",
+
+
+    -- =============================================
+    -- FOOD FISH
+    -- =============================================
+
+    FoodFishID = 5580,
+
+
+    -- =============================================
+    -- TRAINING PORT
+    -- =============================================
+
+    Training = {
+
+        -- TEST SATU PORT
+        startX = 12,
+        endX = 12,
+
+        -- Y PORT
+        y = 51,
+
+        -- Nanti kalau banyak port
+        -- sesuaikan jaraknya
+        stepX = 4
+    },
+
+
+    -- =============================================
+    -- POSISI BERDIRI SEBELAH PORT
+    -- =============================================
+    --
+    -- Port = 12,51
+    -- Player = 11,51
+    --
+
+    StandOffsetX = -1,
+
+
+    -- =============================================
+    -- DELAY
+    -- =============================================
+
+    Delay = {
+
+        afterWarp = 5000,
+
+        afterPath = 1000,
+
+        beforeWrench = 1500,
+
+        afterWrench = 1500,
+
+        dialogTimeout = 7000,
+
+        afterFeed = 3000,
+
+        xpTimeout = 10000,
+
+        beforeRefresh = 2500,
+
+        afterCollect = 2500,
+
+        retryObject = 2000
+    }
+}
+
+
+-- =========================================================
+-- GLOBAL STATE
+-- =========================================================
+
+FishStatus = nil
+
+FishDialogReceived = false
+
+FishPortX = nil
+FishPortY = nil
+
+FishXPReceived = false
+
+ScriptRunning = false
+
+
+-- =========================================================
+-- LOG
+-- =========================================================
+
+function Log(msg)
+
+    log(
+        "[FISH AUTO] "
+        .. tostring(msg)
+    )
+
+end
+
+
+-- =========================================================
+-- WAIT
+-- =========================================================
+
+function Wait(ms)
+
+    Sleep(ms)
+
+end
+
+
+-- =========================================================
+-- POSITION
+-- =========================================================
+
+function Pos()
+
+    local p = GetLocal()
+
+    if not p then
+
+        return 0, 0
+
+    end
+
+    return
+        math.floor(p.posX / 32),
+        math.floor(p.posY / 32)
+
+end
+
+
+-- =========================================================
+-- CURRENT WORLD
+-- =========================================================
+
+function CurrentWorld()
+
+    local ok, result = pcall(function()
+
+        return GetWorldName()
+
+    end)
+
+
+    if ok and result then
+
+        return tostring(result)
+
+    end
+
+
+    return ""
+
+end
+
+
+-- =========================================================
+-- WORLD NAME
+-- =========================================================
+
+function WorldOnly(worldDoor)
+
+    local name =
+        tostring(worldDoor):match("([^|]+)")
+
+
+    if name then
+
+        return name
+
+    end
+
+
+    return tostring(worldDoor)
+
+end
+
+
+-- =========================================================
+-- WARP
+-- =========================================================
+
+function Warp(worldDoor)
+
+    local target =
+        WorldOnly(worldDoor)
+
+
+    Log(
+        "[WARP] "
+        .. tostring(worldDoor)
+    )
+
+
+    -- Sudah di world tujuan
+    if CurrentWorld():lower()
+       == target:lower() then
+
+        Log(
+            "[WARP] Sudah di "
+            .. target
+        )
+
+        return true
+
+    end
+
+
+    growtopia.warpTo(worldDoor)
+
+
+    local startTime = os.clock()
+
+
+    while true do
+
+        Wait(1000)
+
+
+        if CurrentWorld():lower()
+           == target:lower() then
+
+            Log(
+                "[WARP] Berhasil -> "
+                .. CurrentWorld()
+            )
+
+            Wait(
+                Config.Delay.afterWarp
+            )
+
+            return true
+
+        end
+
+
+        if os.clock() - startTime >= 15 then
+
+            Log(
+                "[WARP] TIMEOUT -> "
+                .. target
+            )
+
+            return false
+
+        end
+
+    end
+
+end
+
+
+-- =========================================================
+-- GO TO
+-- =========================================================
+
+function GoTo(x, y)
+
+    Log(
+        "[PATH] -> "
+        .. x
+        .. ","
+        .. y
+    )
+
+
+    FindPath(x, y)
+
+
+    Wait(
+        Config.Delay.afterPath
+    )
+
+
+    local px, py = Pos()
+
+
+    Log(
+        "[PATH] Player = "
+        .. px
+        .. ","
+        .. py
+    )
+
+
+    if math.abs(px - x) <= 1
+       and math.abs(py - y) <= 1 then
+
+        return true
+
+    end
+
+
+    return false
+
+end
+
+
+-- =========================================================
+-- INVENTORY COUNT
+-- =========================================================
+
+function InventoryCount(itemID)
+
+    -- =============================================
+    -- API CHECK INVENTORY
+    -- =============================================
+
+    local ok, count =
+        pcall(function()
+
+            return growtopia.checkInventoryCount(
+                itemID
+            )
+
+        end)
+
+
+    if ok and count ~= nil then
+
+        return tonumber(count) or 0
+
+    end
+
+
+    -- =============================================
+    -- FALLBACK GET INVENTORY
+    -- =============================================
+
+    local ok2, inv =
+        pcall(function()
+
+            return getInventory()
+
+        end)
+
+
+    if ok2 and inv then
+
+        for _, item in pairs(inv) do
+
+            local id =
+                tonumber(
+                    item.id
+                    or item.itemid
+                    or item.itemID
+                    or 0
+                )
+
+
+            if id == itemID then
+
+                return tonumber(
+                    item.count
+                    or item.amount
+                    or item.quantity
+                    or 0
+                ) or 0
+
+            end
+
+        end
+
+    end
+
+
+    return 0
+
+end
+
+
+-- =========================================================
+-- FIND FOOD OBJECT
+-- =========================================================
+
+function FindFoodObject()
+
+    local objects =
+        GetObjectList()
+
+
+    if not objects then
+
+        return nil
+
+    end
+
+
+    local px, py = Pos()
+
+
+    local nearest = nil
+
+    local nearestDistance =
+        math.huge
+
+
+    for _, obj in pairs(objects) do
+
+        local id =
+            tonumber(
+                obj.itemid
+                or obj.id
+                or 0
+            )
+
+
+        if id == Config.FoodFishID then
+
+            local ox =
+                math.floor(
+                    (obj.posX or 0) / 32
+                )
+
+
+            local oy =
+                math.floor(
+                    (obj.posY or 0) / 32
+                )
+
+
+            local distance =
+                math.abs(ox - px)
+                +
+                math.abs(oy - py)
+
+
+            if distance < nearestDistance then
+
+                nearest = obj
+
+                nearestDistance =
+                    distance
+
+            end
+
+        end
+
+    end
+
+
+    return nearest
+
+end
+
+
+-- =========================================================
+-- COLLECT ONE FOOD
+-- =========================================================
+
+function CollectOneFood()
+
+    local before =
+        InventoryCount(
+            Config.FoodFishID
+        )
+
+
+    Log(
+        "[COLLECT] Inventory sebelum = "
+        .. before
+    )
+
+
+    local obj =
+        FindFoodObject()
+
+
+    if not obj then
+
+        Log(
+            "[COLLECT] Food fish tidak ditemukan."
+        )
+
+        return false
+
+    end
+
+
+    local ox =
+        math.floor(
+            (obj.posX or 0) / 32
+        )
+
+
+    local oy =
+        math.floor(
+            (obj.posY or 0) / 32
+        )
+
+
+    Log(
+        "[COLLECT] Food ditemukan di "
+        .. ox
+        .. ","
+        .. oy
+    )
+
+
+    if not GoTo(ox, oy) then
+
+        Log(
+            "[COLLECT] Gagal menuju food."
+        )
+
+        return false
+
+    end
+
+
+    Wait(500)
+
+
+    local objectID =
+        tonumber(obj.id or 0)
+
+
+    if objectID == 0 then
+
+        Log(
+            "[COLLECT] Object ID invalid."
+        )
+
+        return false
+
+    end
+
+
+    SendPacketRaw(
+        false,
+        {
+            type = 11,
+
+            value = objectID,
+
+            x = (obj.posX or 0) + 6,
+
+            y = obj.posY or 0,
+
+            px = ox,
+
+            py = oy
+        }
+    )
+
+
+    Log(
+        "[COLLECT] Packet collect dikirim."
+    )
+
+
+    Wait(
+        Config.Delay.afterCollect
+    )
+
+
+    local after =
+        InventoryCount(
+            Config.FoodFishID
+        )
+
+
+    Log(
+        "[COLLECT] Inventory sesudah = "
+        .. after
+    )
+
+
+    if after > before then
+
+        Log(
+            "[COLLECT] 1 food berhasil diambil."
+        )
+
+        return true
+
+    end
+
+
+    Log(
+        "[COLLECT] Inventory tidak bertambah."
+    )
+
+
+    return false
+
+end
+
+
+-- =========================================================
+-- TAKE ONE FOOD
+-- =========================================================
+
+function TakeOneFood()
+
+    -- =====================================================
+    -- PENTING:
+    -- CEK INVENTORY SEBELUM WARP STORAGE
+    -- =====================================================
+
+    local count =
+        InventoryCount(
+            Config.FoodFishID
+        )
+
+
+    Log(
+        "[FOOD] Inventory sekarang = "
+        .. count
+    )
+
+
+    -- Kalau masih punya food,
+    -- JANGAN pergi storage.
+    if count > 0 then
+
+        Log(
+            "[FOOD] Sudah punya "
+            .. count
+            .. " food."
+        )
+
+        Log(
+            "[FOOD] Tidak perlu ke storage."
+        )
+
+        return true
+
+    end
+
+
+    -- =====================================================
+    -- INVENTORY KOSONG
+    -- =====================================================
+
+    Log(
+        "[FOOD] Inventory kosong."
+    )
+
+
+    Log(
+        "[FOOD] Pergi ke storage."
+    )
+
+
+    if not Warp(
+        Config.StorageWorld
+    ) then
+
+        Log(
+            "[FOOD] Gagal masuk storage."
+        )
+
+        return false
+
+    end
+
+
+    -- =====================================================
+    -- CARI FOOD
+    -- =====================================================
+
+    for attempt = 1, 3 do
+
+        Log(
+            "[FOOD] Cari food attempt "
+            .. attempt
+        )
+
+
+        if CollectOneFood() then
+
+            Log(
+                "[FOOD] Food berhasil didapat."
+            )
+
+            return true
+
+        end
+
+
+        Wait(
+            Config.Delay.retryObject
+        )
+
+    end
+
+
+    Log(
+        "[FOOD] Gagal mendapatkan food."
+    )
+
+
+    return false
+
+end
+
+
+-- =========================================================
+-- WRENCH PORT
+-- =========================================================
+
+function WrenchPort(tx, ty)
+
+    local standX =
+        tx + Config.StandOffsetX
+
+
+    local standY =
+        ty
+
+
+    Log(
+        "[WRENCH] Target = "
+        .. tx
+        .. ","
+        .. ty
+    )
+
+
+    Log(
+        "[WRENCH] Move ke "
+        .. standX
+        .. ","
+        .. standY
+    )
+
+
+    -- =============================================
+    -- KE POSISI SEBELAH PORT
+    -- =============================================
+
+    if not GoTo(
+        standX,
+        standY
+    ) then
+
+        Log(
+            "[WRENCH] Gagal menuju posisi."
+        )
+
+        return false
+
+    end
+
+
+    local px, py =
+        Pos()
+
+
+    local dx =
+        math.abs(tx - px)
+
+
+    local dy =
+        math.abs(ty - py)
+
+
+    Log(
+        "[WRENCH CHECK] Player="
+        .. px
+        .. ","
+        .. py
+        .. " | Port="
+        .. tx
+        .. ","
+        .. ty
+    )
+
+
+    Log(
+        "[DISTANCE] X="
+        .. dx
+        .. " | Y="
+        .. dy
+    )
+
+
+    -- Jangan kirim kalau terlalu jauh
+    if dx > 5 or dy > 5 then
+
+        Log(
+            "[WRENCH] Terlalu jauh."
+        )
+
+        return false
+
+    end
+
+
+    Wait(
+        Config.Delay.beforeWrench
+    )
+
+
+    local p =
+        GetLocal()
+
+
+    if not p then
+
+        Log(
+            "[WRENCH] GetLocal gagal."
+        )
+
+        return false
+
+    end
+
+
+    Log(
+        "[WRENCH] Pixel="
+        .. math.floor(p.posX)
+        .. ","
+        .. math.floor(p.posY)
+    )
+
+
+    SendPacketRaw(
+        false,
+        {
+            type = 3,
+
+            value = 32,
+
+            x = p.posX,
+
+            y = p.posY,
+
+            px = tx,
+
+            py = ty
+        }
+    )
+
+
+    Log(
+        "[WRENCH] Packet terkirim."
+    )
+
+
+    Wait(
+        Config.Delay.afterWrench
+    )
+
+
+    return true
+
+end
+
+
+-- =========================================================
+-- PARSE FISH STATUS
+-- =========================================================
+
+function ParseFishStatus(data)
+
+    if not data then
+
+        return nil
+
+    end
+
+
+    -- Urutan penting:
+    -- yang panjang dicek lebih dulu.
+
+
+    if data:find(
+        "Moderately Full",
+        1,
+        true
+    ) then
+
+        return "Moderately Full"
+
+
+    elseif data:find(
+        "Slightly Hungry",
+        1,
+        true
+    ) then
+
+        return "Slightly Hungry"
+
+
+    elseif data:find(
+        "Almost Dying",
+        1,
+        true
+    ) then
+
+        return "Almost Dying"
+
+
+    elseif data:find(
+        "Super Full",
+        1,
+        true
+    ) then
+
+        return "Super Full"
+
+
+    elseif data:find(
+        "Starving",
+        1,
+        true
+    ) then
+
+        return "Starving"
+
+
+    elseif data:find(
+        "Hungry",
+        1,
+        true
+    ) then
+
+        return "Hungry"
+
+
+    elseif data:find(
+        "Content",
+        1,
+        true
+    ) then
+
+        return "Content"
+
+
+    elseif data:find(
+        "Sick",
+        1,
+        true
+    ) then
+
+        return "Sick"
+
+
+    elseif data:find(
+        "Dead",
+        1,
+        true
+    ) then
+
+        return "Dead"
+
+    end
+
+
+    return nil
+
+end
+
+
+-- =========================================================
+-- GET ALL VARIANT VALUES
+-- =========================================================
+
+function VariantContains(var, text)
+
+    if not var then
+
+        return false
+
+    end
+
+
+    -- =============================================
+    -- v1 - v10
+    -- =============================================
+
+    for i = 1, 10 do
+
+        local ok, value =
+            pcall(function()
+
+                return var[
+                    "v" .. i
+                ]
+
+            end)
+
+
+        if ok and value ~= nil then
+
+            if tostring(value):find(
+                text,
+                1,
+                true
+            ) then
+
+                return true
+
+            end
+
+        end
+
+    end
+
+
+    -- =============================================
+    -- NUMERIC INDEX
+    -- =============================================
+
+    for i = 0, 10 do
+
+        local ok, value =
+            pcall(function()
+
+                return var[i]
+
+            end)
+
+
+        if ok and value ~= nil then
+
+            if tostring(value):find(
+                text,
+                1,
+                true
+            ) then
+
+                return true
+
+            end
+
+        end
+
+    end
+
+
+    return false
+
+end
+
+
+-- =========================================================
+-- GET EVENT NAME
+-- =========================================================
+
+function GetVariantEvent(var)
+
+    if not var then
+
+        return ""
+
+    end
+
+
+    local ok, value =
+        pcall(function()
+
+            return var.v1
+
+        end)
+
+
+    if ok and value ~= nil then
+
+        return tostring(value)
+
+    end
+
+
+    local ok2, value2 =
+        pcall(function()
+
+            return var[1]
+
+        end)
+
+
+    if ok2 and value2 ~= nil then
+
+        return tostring(value2)
+
+    end
+
+
+    return ""
+
+end
+
+
+-- =========================================================
+-- GET VARIANT DATA
+-- =========================================================
+
+function GetVariantData(var)
+
+    if not var then
+
+        return ""
+
+    end
+
+
+    local ok, value =
+        pcall(function()
+
+            return var.v2
+
+        end)
+
+
+    if ok and value ~= nil then
+
+        return tostring(value)
+
+    end
+
+
+    local ok2, value2 =
+        pcall(function()
+
+            return var[2]
+
+        end)
+
+
+    if ok2 and value2 ~= nil then
+
+        return tostring(value2)
+
+    end
+
+
+    return ""
+
+end
+
+
+-- =========================================================
+-- ON VARIANT
+-- =========================================================
+
+function FishVariant(var, pkt)
+
+    if not var then
+
+        return false
+
+    end
+
+
+    local event =
+        GetVariantEvent(var)
+
+
+    local data =
+        GetVariantData(var)
+
+
+    -- =====================================================
+    -- FISH TRAINING PORT DIALOG
+    -- =====================================================
+
+    if event == "OnDialogRequest" then
+
+        if data:find(
+            "fishgotchitank",
+            1,
+            true
+        ) then
+
+            Log(
+                "[DIALOG] Fish Training Port diterima."
+            )
+
+
+            FishDialogReceived = true
+
+
+            -- =============================================
+            -- PORT X
+            -- =============================================
+
+            local tx =
+                data:match(
+                    "embed_data|tilex|(%d+)"
+                )
+
+
+            -- =============================================
+            -- PORT Y
+            -- =============================================
+
+            local ty =
+                data:match(
+                    "embed_data|tiley|(%d+)"
+                )
+
+
+            if tx and ty then
+
+                FishPortX =
+                    tonumber(tx)
+
+
+                FishPortY =
+                    tonumber(ty)
+
+
+                Log(
+                    "[PORT] "
+                    .. FishPortX
+                    .. ","
+                    .. FishPortY
+                )
+
+            end
+
+
+            -- =============================================
+            -- STATUS
+            -- =============================================
+
+            local status =
+                ParseFishStatus(data)
+
+
+            if status then
+
+                FishStatus =
+                    status
+
+
+                Log(
+                    "[STATUS] "
+                    .. FishStatus
+                )
+
+            else
+
+                FishStatus = nil
+
+
+                Log(
+                    "[STATUS] TIDAK TERBACA."
+                )
+
+            end
+
+        end
+
+    end
+
+
+    -- =====================================================
+    -- XP CONFIRMATION
+    -- =====================================================
+    --
+    -- Jangan cuma cek v2.
+    -- Pesan XP bisa berada di parameter Variant
+    -- yang berbeda, jadi scan semua parameter.
+    --
+
+    if event == "OnTalkBubble"
+       or event == "OnConsoleMessage" then
+
+
+        local gained =
+            VariantContains(
+                var,
+                "gained"
+            )
+
+
+        local xp =
+            VariantContains(
+                var,
+                "XP"
+            )
+
+
+        if gained and xp then
+
+            FishXPReceived = true
+
+
+            Log(
+                "[XP] Server confirmation diterima."
+            )
+
+        end
+
+    end
+
+
+    return false
+
+end
+
+
+-- =========================================================
+-- INSTALL HOOK
+-- =========================================================
+
+pcall(function()
+
+    removeHook(
+        "onVariant"
+    )
+
+end)
+
+
+addHook(
+    FishVariant,
+    "onVariant"
+)
+
+
+applyHook()
+
+
+Log(
+    "[HOOK] onVariant aktif."
+)
+
+
+-- =========================================================
+-- WAIT FISH DIALOG
+-- =========================================================
+
+function WaitFishDialog()
+
+    local startTime =
+        os.clock()
+
+
+    while not FishDialogReceived do
+
+        Wait(100)
+
+
+        if os.clock() - startTime
+           >=
+           (
+               Config.Delay.dialogTimeout
+               / 1000
+           ) then
+
+            Log(
+                "[DIALOG] Timeout."
+            )
+
+            return false
+
+        end
+
+    end
+
+
+    return true
+
+end
+
+
+-- =========================================================
+-- READ PORT
+-- =========================================================
+
+function ReadPort(tx, ty)
+
+    -- Reset data lama
+    FishDialogReceived = false
+
+    FishStatus = nil
+
+    FishPortX = nil
+
+    FishPortY = nil
+
+
+    -- =============================================
+    -- WRENCH
+    -- =============================================
+
+    if not WrenchPort(
+        tx,
+        ty
+    ) then
+
+        return false
+
+    end
+
+
+    -- =============================================
+    -- TUNGGU DIALOG
+    -- =============================================
+
+    if not WaitFishDialog() then
+
+        return false
+
+    end
+
+
+    -- =============================================
+    -- CEK PORT
+    -- =============================================
+
+    if FishPortX ~= nil
+       and FishPortY ~= nil then
+
+
+        if FishPortX ~= tx
+           or FishPortY ~= ty then
+
+            Log(
+                "[DIALOG] Koordinat tidak cocok."
+            )
+
+
+            Log(
+                "[DIALOG] Expected="
+                .. tx
+                .. ","
+                .. ty
+                .. " | Received="
+                .. FishPortX
+                .. ","
+                .. FishPortY
+            )
+
+
+            return false
+
+        end
+
+    end
+
+
+    -- =============================================
+    -- CEK STATUS
+    -- =============================================
+
+    if not FishStatus then
+
+        Log(
+            "[STATUS] Tidak diketahui."
+        )
+
+        return false
+
+    end
+
+
+    Log(
+        "[STATUS] Final = "
+        .. FishStatus
+    )
+
+
+    return true
+
+end
+
+
+-- =========================================================
+-- FEED ONE FISH
+-- =========================================================
+
+function FeedOneFish(tx, ty)
+
+    local count =
+        InventoryCount(
+            Config.FoodFishID
+        )
+
+
+    Log(
+        "[FEED] Inventory = "
+        .. count
+    )
+
+
+    if count < 1 then
+
+        Log(
+            "[FEED] Tidak ada food."
+        )
+
+        return false
+
+    end
+
+
+    -- Reset XP
+    FishXPReceived = false
+
+
+    -- =============================================
+    -- DIALOG RETURN
+    -- =============================================
+
+    local packet =
+        "action|dialog_return\n"
+        ..
+        "dialog_name|fishgotchitank\n"
+        ..
+        "tilex|"
+        .. tx
+        .. "|\n"
+        ..
+        "tiley|"
+        .. ty
+        .. "|\n"
+        ..
+        "feedfish|"
+        .. Config.FoodFishID
+
+
+    Log(
+        "[FEED] Kirim feed."
+    )
+
+
+    SendPacket(
+        2,
+        packet
+    )
+
+
+    -- =============================================
+    -- COOLDOWN
+    -- =============================================
+
+    Wait(
+        Config.Delay.afterFeed
+    )
+
+
+    -- =============================================
+    -- WAIT XP
+    -- =============================================
+
+    Log(
+        "[FEED] Menunggu XP..."
+    )
+
+
+    local startTime =
+        os.clock()
+
+
+    while not FishXPReceived do
+
+        Wait(100)
+
+
+        if os.clock() - startTime
+           >=
+           (
+               Config.Delay.xpTimeout
+               / 1000
+           ) then
+
+            Log(
+                "[FEED] XP TIMEOUT."
+            )
+
+
+            return false
+
+        end
+
+    end
+
+
+    Log(
+        "[FEED] XP OK."
+    )
+
+
+    Wait(
+        Config.Delay.beforeRefresh
+    )
+
+
+    return true
+
+end
+
+
+-- =========================================================
+-- PROCESS ONE PORT
+-- =========================================================
+
+function ProcessPort(tx, ty)
+
+    Log("")
+    Log("========================================")
+    Log(
+        "[PORT] MULAI "
+        .. tx
+        .. ","
+        .. ty
+    )
+    Log("========================================")
+
+
+    -- =============================================
+    -- BACA STATUS AWAL
+    -- =============================================
+
+    if not ReadPort(
+        tx,
+        ty
+    ) then
+
+        Log(
+            "[PORT] Gagal membaca status."
+        )
+
+        return false
+
+    end
+
+
+    -- =============================================
+    -- LOOP SAMPAI CONTENT
+    -- =============================================
+
+    while true do
+
+        Log(
+            "[PORT] Status = "
+            .. tostring(FishStatus)
+        )
+
+
+        -- =========================================
+        -- CONTENT
+        -- =========================================
+
+        if FishStatus == "Content" then
+
+            Log(
+                "[PORT] CONTENT -> SELESAI."
+            )
+
+
+            return true
+
+        end
+
+
+        -- =========================================
+        -- KONDISI BERBAHAYA
+        -- =========================================
+
+        if FishStatus == "Moderately Full"
+           or FishStatus == "Super Full"
+           or FishStatus == "Sick"
+           or FishStatus == "Almost Dying"
+           or FishStatus == "Dead" then
+
+            Log(
+                "[SAFETY] "
+                .. FishStatus
+                .. " -> STOP."
+            )
+
+
+            return false
+
+        end
+
+
+        -- =========================================
+        -- STATUS HARUS DIKENAL
+        -- =========================================
+
+        if FishStatus ~= "Starving"
+           and FishStatus ~= "Hungry"
+           and FishStatus ~= "Slightly Hungry" then
+
+            Log(
+                "[SAFETY] Status tidak dikenal -> STOP."
+            )
+
+
+            return false
+
+        end
+
+
+        -- =========================================
+        -- CEK / AMBIL FOOD
+        -- =========================================
+
+        if not TakeOneFood() then
+
+            Log(
+                "[PORT] Tidak berhasil mendapatkan food."
+            )
+
+
+            return false
+
+        end
+
+
+        -- =========================================
+        -- KEMBALI TRAINING WORLD
+        -- =========================================
+
+        if not Warp(
+            Config.TrainingWorld
+        ) then
+
+            Log(
+                "[PORT] Gagal kembali training world."
+            )
+
+
+            return false
+
+        end
+
+
+        -- =========================================
+        -- KEMBALI KE SEBELAH PORT
+        -- =========================================
+
+        local standX =
+            tx + Config.StandOffsetX
+
+
+        local standY =
+            ty
+
+
+        Log(
+            "[PORT] Kembali ke posisi "
+            .. standX
+            .. ","
+            .. standY
+        )
+
+
+        if not GoTo(
+            standX,
+            standY
+        ) then
+
+            Log(
+                "[PORT] Gagal kembali ke port."
+            )
+
+
+            return false
+
+        end
+
+
+        -- =========================================
+        -- CEK POSISI
+        -- =========================================
+
+        local px, py =
+            Pos()
+
+
+        Log(
+            "[PORT] Player sekarang = "
+            .. px
+            .. ","
+            .. py
+        )
+
+
+        if math.abs(px - standX) > 1
+           or math.abs(py - standY) > 1 then
+
+            Log(
+                "[PORT] Posisi tidak sesuai."
+            )
+
+
+            return false
+
+        end
+
+
+        -- =========================================
+        -- FEED
+        -- =========================================
+
+        if not FeedOneFish(
+            tx,
+            ty
+        ) then
+
+            Log(
+                "[PORT] Feed gagal."
+            )
+
+
+            return false
+
+        end
+
+
+        -- =========================================
+        -- REFRESH STATUS
+        -- =========================================
+
+        Log(
+            "[PORT] Refresh status..."
+        )
+
+
+        if not ReadPort(
+            tx,
+            ty
+        ) then
+
+            Log(
+                "[PORT] Gagal membaca status setelah feed."
+            )
+
+
+            return false
+
+        end
+
+    end
+
+end
+
+
+-- =========================================================
+-- MAIN
+-- =========================================================
+
+function Main()
+
+    if ScriptRunning then
+
+        Log(
+            "[MAIN] Script sudah berjalan."
+        )
+
+
+        return
+
+    end
+
+
+    ScriptRunning = true
+
+
+    Log("")
+    Log("========================================")
+    Log("      FISH TRAINING AUTO START")
+    Log("========================================")
+
+
+    Log(
+        "[CONFIG] Storage = "
+        .. Config.StorageWorld
+    )
+
+
+    Log(
+        "[CONFIG] Training = "
+        .. Config.TrainingWorld
+    )
+
+
+    Log(
+        "[CONFIG] Food ID = "
+        .. Config.FoodFishID
+    )
+
+
+    Log(
+        "[CONFIG] Port X = "
+        .. Config.Training.startX
+        .. " -> "
+        .. Config.Training.endX
+    )
+
+
+    Log(
+        "[CONFIG] Port Y = "
+        .. Config.Training.y
+    )
+
+
+    Log("========================================")
+
+
+    -- =============================================
+    -- MASUK TRAINING WORLD
+    -- =============================================
+
+    if not Warp(
+        Config.TrainingWorld
+    ) then
+
+        Log(
+            "[MAIN] Gagal masuk training world."
+        )
+
+
+        ScriptRunning = false
+
+
+        return
+
+    end
+
+
+    -- =============================================
+    -- LOOP PORT
+    -- =============================================
+
+    local x =
+        Config.Training.startX
+
+
+    while true do
+
+        -- =========================================
+        -- CEK BATAS
+        -- =========================================
+
+        if Config.Training.stepX > 0 then
+
+            if x > Config.Training.endX then
+
+                break
+
+            end
+
+        else
+
+            if x < Config.Training.endX then
+
+                break
+
+            end
+
+        end
+
+
+        local y =
+            Config.Training.y
+
+
+        Log("")
+        Log("========================================")
+        Log(
+            "[MAIN] PROCESS PORT "
+            .. x
+            .. ","
+            .. y
+        )
+        Log("========================================")
+
+
+        local success =
+            ProcessPort(
+                x,
+                y
+            )
+
+
+        if not success then
+
+            Log("")
+            Log("========================================")
+            Log(
+                "[MAIN] STOP DI PORT "
+                .. x
+                .. ","
+                .. y
+            )
+            Log("========================================")
+
+
+            ScriptRunning = false
+
+
+            return
+
+        end
+
+
+        Log(
+            "[MAIN] PORT "
+            .. x
+            .. ","
+            .. y
+            .. " SELESAI."
+        )
+
+
+        -- =========================================
+        -- PORT BERIKUTNYA
+        -- =========================================
+
+        x =
+            x + Config.Training.stepX
+
+
+        Wait(1000)
+
+    end
+
+
+    -- =============================================
+    -- SELESAI
+    -- =============================================
+
+    Log("")
+    Log("========================================")
+    Log("       SEMUA PORT SELESAI")
+    Log("========================================")
+
+
+    ScriptRunning = false
+
+end
+
+
+-- =========================================================
+-- START
+-- =========================================================
+
+runThread(
+    function()
+
+        Main()
+
+    end
+)
